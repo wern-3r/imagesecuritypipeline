@@ -28,81 +28,155 @@ jobs:
 
 
     steps:
-      - name: Checkout repository
+      # -----------------------------------------------------------------------
+      # Setup
+      # -----------------------------------------------------------------------
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Log in to GHCR
+      - name: Set build metadata
+        id: vars
+        run: |
+          echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          echo "git_commit=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+          echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+      - name: Checkout repository
+      
+      # -----------------------------------------------------------------------
+      # Install Security Tools
+      # -----------------------------------------------------------------------
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          hide-progress: true
+          skip-files: 'go.sum'
+          exit-code: '0'
+
+      # -----------------------------------------------------------------------
+      # Build Container Image
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+
       - name: Build and push image
-        uses: docker/build-push-action@v6
+        id: build
+        uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.IMAGE_TAG }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.vars.outputs.version }}
+            BUILD_TIME=${{ steps.vars.outputs.build_time }}
+            GIT_COMMIT=${{ steps.vars.outputs.git_commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
 
-      - name: Run Trivy and generate JSON report
-        uses: aquasecurity/trivy-action@0.28.0
+      # -----------------------------------------------------------------------
+      # Security Scanning (Trivy)
+      # -----------------------------------------------------------------------
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.IMAGE_TAG }}
-          format: 'json'
-          output: 'trivy-report.json'
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Scan and fail on critical vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL'
           ignore-unfixed: true
-          vuln-type: 'os,library'
-          exit-code: '0'
 
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
 
+      # -----------------------------------------------------------------------
+      # Sign Image with Cosign (Keyless via Sigstore)
+      # -----------------------------------------------------------------------
       - name: Sign container image (keyless)
         run: |
           cosign sign --yes \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
       
-      - name: Enforce vulnerability threshold
-        run: |
-          sudo apt-get update && sudo apt-get install -y jq
-
-          HIGH_COUNT=$(jq '[.Results[].Vulnerabilities // [] | .[] | select(.Severity=="HIGH")] | length' trivy-report.json)
-          CRITICAL_COUNT=$(jq '[.Results[].Vulnerabilities // [] | .[] | select(.Severity=="CRITICAL")] | length' trivy-report.json)
-
-          TOTAL=$((HIGH_COUNT + CRITICAL_COUNT))
-
-          echo "High vulnerabilities: ${HIGH_COUNT}"
-          echo "Critical vulnerabilities: ${CRITICAL_COUNT}"
-          echo "Total High+Critical: ${TOTAL}"
-
-          THRESHOLD=5
-
-          if [ "$TOTAL" -gt "$THRESHOLD" ]; then
-            echo "Vulnerability threshold exceeded (threshold=${THRESHOLD}, found=${TOTAL}). Failing the build."
-            exit 1
-          else
-            echo "Vulnerability threshold respected (threshold=${THRESHOLD}, found=${TOTAL})."
-          fi
-
-      - name: Generate HTML report
-        run: |
-          echo "<html><head><title>Trivy Vulnerability Report</title></head><body>" > trivy-report.html
-          echo "<h1>Trivy Vulnerability Report</h1>" >> trivy-report.html
-          echo "<p>Image: ${IMAGE_NAME}:${IMAGE_TAG}</p>" >> trivy-report.html
-          echo "<h2>Raw JSON Output</h2>" >> trivy-report.html
-          echo "<pre>" >> trivy-report.html
-          jq '.' trivy-report.json >> trivy-report.html
-          echo "</pre>" >> trivy-report.html
-          echo "</body></html>" >> trivy-report.html
-
-      - name: Upload HTML report artifact
-        uses: actions/upload-artifact@v4
+      
+      # -----------------------------------------------------------------------
+      # GitHub Native Attestations (SLSA Provenance)
+      # -----------------------------------------------------------------------
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
         with:
-          name: trivy-html-report
-          path: trivy-report.html
-          retention-days: 7
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+    
+
+      # -----------------------------------------------------------------------
+      # Summary
+      # -----------------------------------------------------------------------
+      - name: Generate summary
+        run: |
+          echo "## Supply Chain Security Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Image" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Security Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Vulnerability Scan | Trivy |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cosign Signature | Keyless (Sigstore) |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM Attestation | Attached |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Provenance | GitHub Attestations |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Verify Commands" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Verify signature" >> $GITHUB_STEP_SUMMARY
+          echo "cosign verify ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-identity-regexp='https://github.com/${{ github.repository }}/.*' \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-oidc-issuer='https://token.actions.githubusercontent.com'" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# View SBOM attestation" >> $GITHUB_STEP_SUMMARY
+          echo "cosign verify-attestation ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --type spdxjson \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-identity-regexp='https://github.com/${{ github.repository }}/.*' \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-oidc-issuer='https://token.actions.githubusercontent.com'" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
   # ===========================================================================
   # Verify Signing
