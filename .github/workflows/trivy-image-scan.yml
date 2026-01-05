@@ -40,7 +40,6 @@ jobs:
           echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
           echo "git_commit=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
           echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-      - name: Checkout repository
       
       # -----------------------------------------------------------------------
       # Install Security Tools
