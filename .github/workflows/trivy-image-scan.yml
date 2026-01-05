@@ -37,6 +37,16 @@ jobs:
           vuln-type: 'os,library'
           exit-code: '0'
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'latest'
+
+      - name: Sign container image (keyless)
+        run: |
+          cosign sign --yes \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+      
       - name: Enforce vulnerability threshold
         run: |
           sudo apt-get update && sudo apt-get install -y jq
@@ -76,3 +86,35 @@ jobs:
           name: trivy-html-report
           path: trivy-report.html
           retention-days: 7
+
+  # ===========================================================================
+  # Verify Signing
+  # ===========================================================================
+  verify:
+    name: Verify Cosign
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Verify image signature
+        run: |
+          echo "Verifying image signature..."
+          cosign verify \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }} \
+            --certificate-identity-regexp='https://github.com/${{ github.repository }}/.*' \
+            --certificate-oidc-issuer='https://token.actions.githubusercontent.com'
+          echo "Signature verified!"
+
+      - name: List attestations
+        run: |
+          echo "Listing image attestations..."
+          cosign tree ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }} || true
+          echo "Done!"
