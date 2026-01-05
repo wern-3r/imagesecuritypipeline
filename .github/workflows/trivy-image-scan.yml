@@ -149,7 +149,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Generate summary
         run: |
-          echo "## Supply Chain Security Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## Security Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Image" >> $GITHUB_STEP_SUMMARY
           echo "- **Registry:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
@@ -161,7 +161,6 @@ jobs:
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Vulnerability Scan | Trivy |" >> $GITHUB_STEP_SUMMARY
           echo "| Cosign Signature | Keyless (Sigstore) |" >> $GITHUB_STEP_SUMMARY
-          echo "| SBOM Attestation | Attached |" >> $GITHUB_STEP_SUMMARY
           echo "| Build Provenance | GitHub Attestations |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Verify Commands" >> $GITHUB_STEP_SUMMARY
