@@ -21,6 +21,7 @@ jobs:
       packages: write
       id-token: write      # Required for OIDC (keyless signing)
       attestations: write  # Required for GitHub attestations
+      security-events: write  # Required for Trivy SARIF upload
 
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -109,7 +110,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy scan results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'trivy-results.sarif'
 
