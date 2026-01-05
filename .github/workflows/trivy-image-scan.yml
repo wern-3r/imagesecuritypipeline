@@ -12,6 +12,10 @@ jobs:
   build-and-scan:
     runs-on: ubuntu-24.04
 
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+
     permissions:
       contents: read
 
@@ -92,7 +96,7 @@ jobs:
   # ===========================================================================
   verify:
     name: Verify Cosign
-    needs: build
+    needs: build-and-scan
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
 
@@ -108,7 +112,7 @@ jobs:
         run: |
           echo "Verifying image signature..."
           cosign verify \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-scan.outputs.digest }} \
             --certificate-identity-regexp='https://github.com/${{ github.repository }}/.*' \
             --certificate-oidc-issuer='https://token.actions.githubusercontent.com'
           echo "Signature verified!"
@@ -116,5 +120,5 @@ jobs:
       - name: List attestations
         run: |
           echo "Listing image attestations..."
-          cosign tree ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }} || true
+          cosign tree ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-scan.outputs.digest }} || true
           echo "Done!"
