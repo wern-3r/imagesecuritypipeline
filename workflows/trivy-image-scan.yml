@@ -1,0 +1,78 @@
+name: Container Image Build and Trivy Scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+
+    env:
+      IMAGE_NAME: trivy-demo
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t $IMAGE_NAME:$IMAGE_TAG .
+
+      - name: Run Trivy and generate JSON report
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: 'json'
+          output: 'trivy-report.json'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          exit-code: '0'
+
+      - name: Enforce vulnerability threshold
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+
+          HIGH_COUNT=$(jq '[.Results[].Vulnerabilities // [] | .[] | select(.Severity=="HIGH")] | length' trivy-report.json)
+          CRITICAL_COUNT=$(jq '[.Results[].Vulnerabilities // [] | .[] | select(.Severity=="CRITICAL")] | length' trivy-report.json)
+
+          TOTAL=$((HIGH_COUNT + CRITICAL_COUNT))
+
+          echo "High vulnerabilities: ${HIGH_COUNT}"
+          echo "Critical vulnerabilities: ${CRITICAL_COUNT}"
+          echo "Total High+Critical: ${TOTAL}"
+
+          THRESHOLD=5
+
+          if [ "$TOTAL" -gt "$THRESHOLD" ]; then
+            echo "Vulnerability threshold exceeded (threshold=${THRESHOLD}, found=${TOTAL}). Failing the build."
+            exit 1
+          else
+            echo "Vulnerability threshold respected (threshold=${THRESHOLD}, found=${TOTAL})."
+          fi
+
+      - name: Generate HTML report
+        run: |
+          echo "<html><head><title>Trivy Vulnerability Report</title></head><body>" > trivy-report.html
+          echo "<h1>Trivy Vulnerability Report</h1>" >> trivy-report.html
+          echo "<p>Image: ${IMAGE_NAME}:${IMAGE_TAG}</p>" >> trivy-report.html
+          echo "<h2>Raw JSON Output</h2>" >> trivy-report.html
+          echo "<pre>" >> trivy-report.html
+          jq '.' trivy-report.json >> trivy-report.html
+          echo "</pre>" >> trivy-report.html
+          echo "</body></html>" >> trivy-report.html
+
+      - name: Upload HTML report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-html-report
+          path: trivy-report.html
+          retention-days: 7
