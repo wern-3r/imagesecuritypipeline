@@ -170,12 +170,6 @@ jobs:
           echo "  --certificate-identity-regexp='https://github.com/${{ github.repository }}/.*' \\" >> $GITHUB_STEP_SUMMARY
           echo "  --certificate-oidc-issuer='https://token.actions.githubusercontent.com'" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# View SBOM attestation" >> $GITHUB_STEP_SUMMARY
-          echo "cosign verify-attestation ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \\" >> $GITHUB_STEP_SUMMARY
-          echo "  --type spdxjson \\" >> $GITHUB_STEP_SUMMARY
-          echo "  --certificate-identity-regexp='https://github.com/${{ github.repository }}/.*' \\" >> $GITHUB_STEP_SUMMARY
-          echo "  --certificate-oidc-issuer='https://token.actions.githubusercontent.com'" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
   # ===========================================================================
   # Verify Signing
